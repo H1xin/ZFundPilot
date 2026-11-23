@@ -24,14 +24,40 @@ git clone --branch personal https://github.com/H1xin/ZFundPilot.git
 Set-Location ZFundPilot
 python -m venv .venv
 & .\.venv\Scripts\python.exe -m pip install -e .
-Push-Location frontend
-npm.cmd ci
-npm.cmd run build
-Pop-Location
-.\start-local.cmd
+& .\.venv\Scripts\python.exe .\build-local.py
 ```
 
+按下文校验并安装构建产物后，双击 `start-local.cmd`。
+
 启动脚本不自动读取 Docker 使用的 `.env` 文件。首次启动后可在设置页配置访问密码；若需首次启动就设密码，可在运行脚本前设置进程环境变量 `ZFUNDPILOT_PASSWORD`。请勿把密码写进启动脚本。
+
+## 构建、溯源和回滚
+
+日常部署前，先提交或合并要部署的代码，并记录改动。用 `.venv\Scripts\python.exe .\build-local.py` 构建当前 `HEAD`，或加 `--ref <完整 SHA>` 构建指定提交。脚本用 `git archive` 提取该提交中的前端文件，然后依次执行 `npm ci`、现有前端测试及生产构建。工作区未提交文件和本机 `.env` 不会进入源码快照。开发调试可继续使用上游的开发命令。
+
+成功后，脚本在 `data/build-history/` 下保留一个新目录，包含 `build.json` 和 `frontend-dist.zip`。记录包括源码完整 SHA、与本地 `origin/main` 的共同祖先、构建脚本和依赖文件的 SHA-256、工具版本、构建命令和产物 SHA-256。共同祖先基于最近一次拉取的 `origin/main`，浅克隆缺少历史时可能为空。Python 包清单记录本机环境，后端及数据库仍需单独备份。此记录为本机生成的未签名清单，构建记录与产物保存在本机。
+
+安装前停止本机服务，确认 `build.json` 中的 `source_commit` 与 `git rev-parse HEAD` 一致。将下方目录替换为脚本输出的目录，再执行：
+
+```powershell
+$build = Get-Item -LiteralPath 'data\build-history\<构建目录>'
+$record = Get-Content -LiteralPath (Join-Path $build.FullName 'build.json') -Raw | ConvertFrom-Json
+if ((git rev-parse HEAD) -ne $record.source_commit) { throw 'Source commit does not match build.json.' }
+$bundle = Join-Path $build.FullName 'frontend-dist.zip'
+if ((Get-FileHash -LiteralPath $bundle -Algorithm SHA256).Hash -ne $record.artifact.sha256) {
+    throw 'Frontend archive checksum does not match build.json.'
+}
+$backup = Join-Path 'data' ('previous-dist-' + $build.Name)
+if (Test-Path -LiteralPath $backup) { throw 'The previous frontend backup already exists.' }
+$staged = Join-Path $build.FullName 'staged-dist'
+Expand-Archive -LiteralPath $bundle -DestinationPath $staged
+if (Test-Path -LiteralPath 'frontend\dist') { Move-Item -LiteralPath 'frontend\dist' -Destination $backup }
+Move-Item -LiteralPath $staged -Destination 'frontend\dist'
+```
+
+回滚时从旧 `build.json` 找回完整源码 SHA，用 `git worktree add --detach <恢复目录> <完整 SHA>` 在独立目录检出，按当时的 Python 环境与配置恢复后端，并用旧压缩包恢复前端。若新版已迁移 SQLite，优先使用升级前的数据库备份在恢复目录验证旧版，避免旧程序直接打开新版数据库。
+
+功能、修复及迁移说明写入 [个人更新记录](PERSONAL_CHANGELOG.md)。上游版本变化仍查看 [上游更新日志](CHANGELOG.md)。本机溯源规则参考 [SLSA 构建溯源](https://slsa.dev/spec/v1.2/build-provenance)、[npm ci](https://docs.npmjs.com/cli/commands/npm-ci/)、[pip 可重复安装](https://pip.pypa.io/en/stable/topics/repeatable-installs/) 和 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)。如果未来发布供他人下载的版本，可用 [GitHub Artifact Attestations](https://docs.github.com/en/actions/concepts/security/artifact-attestations) 签署发布产物的来源。
 
 ## 接入 AI
 
@@ -48,18 +74,16 @@ Pop-Location
 ## 接收源项目更新
 
 1. 在 GitHub 切换到 `main`，执行 **Sync fork → Update branch**。
-2. 在自己的仓库创建 PR，确认目标为 `H1xin/ZFundPilot`，**base: personal，compare: main**。检查差异、处理冲突并合并。
-3. 停止本机服务，将整个 `data` 文件夹复制到仓库以外的位置备份。它包含数据库、AI 加密密钥及登录配置。
-4. 在本机项目目录执行以下命令，再双击启动脚本。
+2. 在自己的仓库创建 PR，确认目标为 `H1xin/ZFundPilot`，**base: personal，compare: main**。检查差异，记录涉及的上游提交和迁移事项，再用 **Create a merge commit** 合并，以保留上游提交关系。
+3. 停止本机服务，将整个 `data` 文件夹复制到仓库以外的位置备份。它包含数据库、AI 加密密钥、登录配置和构建历史。
+4. 在本机项目目录执行以下命令，再按上文校验并安装产物，最后双击启动脚本。
 
 ```powershell
 git switch personal
+git fetch origin main
 git pull --ff-only origin personal
 & .\.venv\Scripts\python.exe -m pip install -e .
-Push-Location frontend
-npm.cmd ci
-npm.cmd run build
-Pop-Location
+& .\.venv\Scripts\python.exe .\build-local.py
 ```
 
 若工作区存在未提交修改，先保存自己的改动再拉取，不要强制覆盖。更新前阅读上游版本说明，特别留意数据库迁移。

@@ -8,7 +8,7 @@ if not exist ".venv\Scripts\python.exe" (
   exit /b 1
 )
 if not exist "frontend\dist\index.html" (
-  echo Frontend build missing. Run npm ci and npm run build in frontend first.
+  echo Frontend build missing. See PERSONAL_DEPLOY.md to build and install it.
   pause
   exit /b 1
 )
