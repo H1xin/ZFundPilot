@@ -1,0 +1,45 @@
+name: Check upstream updates
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Monday 09:17 in Asia/Shanghai. Scheduled runs use the default branch.
+    - cron: '17 1 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-upstream
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Compare upstream main with the fork mirror
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream_sha="$(gh api repos/Euzohn/ZFundPilot/commits/main --jq .sha)"
+          mirror_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          {
+            echo '## ZFundPilot upstream update check'
+            echo
+            echo "- Upstream main: \`${upstream_sha}\`"
+            echo "- Fork main: \`${mirror_sha}\`"
+            echo
+            if [ "$upstream_sha" = "$mirror_sha" ]; then
+              echo 'The fork main branch matches upstream main.'
+            else
+              echo 'The branches differ. Review upstream changes before updating.'
+              echo "1. Open https://github.com/${GITHUB_REPOSITORY}/tree/main and choose Sync fork > Update branch."
+              echo "2. Create a pull request inside ${GITHUB_REPOSITORY}: base personal, compare main."
+              echo '3. Review, merge, back up local data, and update the local application.'
+            fi
+            echo
+            echo 'This workflow only reads commit IDs. It does not merge, deploy, or access portfolio data.'
+          } >> "$GITHUB_STEP_SUMMARY"
